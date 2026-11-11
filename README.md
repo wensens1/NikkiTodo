@@ -111,8 +111,9 @@ NikkiTodo/
 │   └── __init__.py
 ├── assets/               # 立绘、图标、SVG 素材
 ├── docs/
-│   ├── 使用说明.txt       # 面向使用者的图文说明
-│   └── 开发日记/         # 各版本开发记录
+│   ├── 使用说明.txt         # 面向使用者的完整图文说明
+│   ├── 使用说明（简版）.txt  # 精简版使用说明
+│   └── 开发日记/           # 各版本开发记录
 ├── release/              # 预打包 exe（不入库）
 ├── app.ico               # 程序图标
 ├── NikkiTodo.spec        # PyInstaller 打包配置
