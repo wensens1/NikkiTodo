@@ -1,0 +1,11 @@
+# 文本文件统一按 LF 归一化入库
+* text=auto eol=lf
+
+# 批处理保持 CRLF，避免 cmd 解析异常
+*.bat text eol=crlf
+
+# 二进制素材不做换行转换
+*.png binary
+*.ico binary
+*.exe binary
+*.bak binary
