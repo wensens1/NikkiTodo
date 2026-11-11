@@ -102,6 +102,10 @@ WEEK_CN = "一二三四五六日"
 # --------------------------------------------------------------------------- #
 NOTE_DRAG_HOLD_MS = 200     # 侧栏便签：按住多久算「要拖动换位」
 NOTE_DRAG_MOVE_MS = 120     # 已经按住这么久再滑动，也算要拖动
+# 待办条目：窗口拖动延后判定——先给长按排序留出手势窗口，超过这个时长/位移仍不像排序
+# （即没进入排序）才转成拖窗口。阈值与 TodoItem 自身的排序启动条件对齐。
+TODO_WINDRAG_MS = 120
+TODO_WINDRAG_PX = 8
 
 
 class _NoteSideBtn(QPushButton):
@@ -453,6 +457,8 @@ class MainWindow(QWidget):
         if app is not None:
             app.focusChanged.connect(self._on_app_focus_changed)
         self._win_drag = None        # 卡片拖动状态：{press: 按下时全局坐标, xy: 按下时窗口位置, moved}
+        self._win_drag_pending = None  # 条目上按下先挂起，延后判定是否转成拖窗口（见 eventFilter）
+        self._drag_tid = None        # 正在拖动排序的待办 id；None 表示当前不在排序拖动
         # Ctrl+F 查找：待办页存命中的条目控件，便签页存命中的便签 dict
         self._find_matches: list = []
         self._find_index = -1
@@ -1829,6 +1835,9 @@ class MainWindow(QWidget):
 
     def _on_todo_drag_begin(self, tid: str):
         self._drag_tid = tid
+        # 进入排序后，取消一切窗口拖动状态，避免两个拖动同时进行
+        self._win_drag = None
+        self._win_drag_pending = None
 
     def _on_todo_drag_move(self, gpos):
         """被拖的那条跟着鼠标换位：按其它条目的中心线算落点，一次可以跨好几条"""
@@ -2061,28 +2070,57 @@ class MainWindow(QWidget):
             elif event.type() == QEvent.Type.Leave:
                 self._hide_input_hint()
             return super().eventFilter(obj, event)
-        # 窗口拖动：card 和 TodoItem 都触发
+        # 窗口拖动：card 背景直接触发；TodoItem 先挂起，把前序手势让给长按排序
         is_drag_target = (obj is self.card or isinstance(obj, TodoItem))
         if is_drag_target and event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
             self._clear_text_selection()
             self._hide_input_hint()
-            self._win_drag = {
-                "press": event.globalPosition().toPoint(),
-                "xy": QPoint(self.x(), self.y()),
-                "moved": False,
-            }
+            gpos = event.globalPosition().toPoint()
+            if isinstance(obj, TodoItem):
+                # 条目上先不生效窗口拖动：等它要么进入排序，要么达到明显的拖窗口手势
+                self._win_drag_pending = {
+                    "press": gpos,
+                    "xy": QPoint(self.x(), self.y()),
+                    "at": time.monotonic(),
+                    "moved": False,
+                }
+            else:
+                self._win_drag = {
+                    "press": gpos,
+                    "xy": QPoint(self.x(), self.y()),
+                    "moved": False,
+                }
             # 不拦截事件，让 TodoItem 自己处理长按排序
             return False
         if is_drag_target and event.type() == QEvent.Type.MouseMove:
+            gpos = event.globalPosition().toPoint()
             if self._win_drag is not None:
-                self._drag_window_to(event.globalPosition().toPoint())
+                self._drag_window_to(gpos)
+                return False
+            if self._win_drag_pending is not None:
+                # 排序已经开始：残留挂起直接作废，绝不再转回窗口拖动
+                if self._drag_tid is not None:
+                    self._win_drag_pending = None
+                    return False
+                d = self._win_drag_pending
+                delta = gpos - d["press"]
+                long_enough = time.monotonic() - d["at"] >= TODO_WINDRAG_MS / 1000
+                far_enough = abs(delta.x()) > TODO_WINDRAG_PX or abs(delta.y()) > TODO_WINDRAG_PX
+                if long_enough and far_enough:
+                    # 超过排序判定窗口仍没进入排序，视为拖窗口手势，转成窗口拖动
+                    d["moved"] = True
+                    self._win_drag = d
+                    self._win_drag_pending = None
+                    self._drag_window_to(gpos)
+                # 其余情况把移动交给条目自己判长按排序
                 return False
         if is_drag_target and (
             event.type() == QEvent.Type.MouseButtonRelease
             or event.type() == QEvent.Type.UngrabMouse
         ):
-            if self._win_drag is not None:
+            if self._win_drag is not None or self._win_drag_pending is not None:
                 self._win_drag = None
+                self._win_drag_pending = None
                 self._arm_edge_shrink()
                 if event.type() == QEvent.Type.MouseButtonRelease:
                     return False
